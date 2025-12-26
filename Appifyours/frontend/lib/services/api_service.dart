@@ -953,6 +953,54 @@ class ApiService {
     }
   }
 
+
+// Submit support request
+  Future<Map<String, dynamic>> submitSupport({
+    required String name,
+    required String email,
+    required String message,
+    String? userId,
+  }) async {
+    try {
+      print('Submitting support request from: $name ($email)');
+      
+      final response = await postWithoutAuth('/api/support', {
+        'name': name,
+        'email': email,
+        'message': message,
+        'userId': userId,
+      });
+
+      print('Support request response status: ${response.statusCode}');
+      print('Support request response body: ${response.body}');
+
+      if (response.statusCode == 201) {
+        final data = json.decode(response.body);
+        print('Support request submitted successfully');
+        return {
+          'success': true,
+          'message': 'Support request submitted successfully',
+          'data': data,
+        };
+      } else {
+        final error = json.decode(response.body);
+        print('Support request submission failed: ${error['message'] ?? 'Unknown error'}');
+        return {
+          'success': false,
+          'message': error['message'] ?? 'Failed to submit support request',
+          'error': error,
+        };
+      }
+    } catch (e) {
+      print('Exception in submitSupport: $e');
+      return {
+        'success': false,
+        'message': 'Failed to submit support request: $e',
+      };
+    }
+  }
+
+  
   // ===== NEW METHODS FOR DYNAMIC FEATURES =====
 
   // Get app name for splash screen
@@ -1325,6 +1373,8 @@ class ApiService {
     required String email,
     required String password,
     String? phone,
+    String? adminId,
+    String? appId,
   }) async {
     try {
       final response = await http.post(
@@ -1338,6 +1388,8 @@ class ApiService {
           'email': email,
           'password': password,
           'phone': phone ?? '',
+          if (adminId != null && adminId.isNotEmpty) 'adminId': adminId,
+          if (appId != null && appId.isNotEmpty) 'appId': appId,
         }),
       );
 
@@ -1348,10 +1400,22 @@ class ApiService {
       final isOkStatus = response.statusCode == 200 || response.statusCode == 201;
       final isSuccessFlag = decoded is Map<String, dynamic> && decoded['success'] == true;
 
+      String? token;
+      String? userId;
+      if (decoded is Map<String, dynamic>) {
+        token = decoded['token']?.toString();
+        final user = decoded['user'];
+        if (user is Map<String, dynamic>) {
+          userId = user['_id']?.toString();
+        }
+      }
+
       return {
         'success': isOkStatus && (decoded is Map<String, dynamic> ? (decoded['success'] == true) : true),
         'data': decoded,
         'statusCode': response.statusCode,
+        'token': token,
+        'userId': userId,
       };
     } catch (e) {
       print('Dynamic Signup Error: $e');
@@ -1359,6 +1423,8 @@ class ApiService {
         'success': false,
         'data': {'message': 'Network error: $e'},
         'statusCode': 500,
+        'token': null,
+        'userId': null,
       };
     }
   }
@@ -1367,6 +1433,8 @@ class ApiService {
   Future<Map<String, dynamic>> dynamicLogin({
     required String email,
     required String password,
+    String? adminId,
+    String? appId,
   }) async {
     try {
       final response = await http.post(
@@ -1377,16 +1445,31 @@ class ApiService {
         body: json.encode({
           'email': email,
           'password': password,
+          if (adminId != null && adminId.isNotEmpty) 'adminId': adminId,
+          if (appId != null && appId.isNotEmpty) 'appId': appId,
         }),
       );
 
       print('Dynamic Login Response Status: ${response.statusCode}');
       print('Dynamic Login Response Body: ${response.body}');
 
+      final decoded = json.decode(response.body);
+      String? token;
+      String? userId;
+      if (decoded is Map<String, dynamic>) {
+        token = decoded['token']?.toString();
+        final user = decoded['user'];
+        if (user is Map<String, dynamic>) {
+          userId = user['_id']?.toString();
+        }
+      }
+
       return {
         'success': response.statusCode == 200,
-        'data': json.decode(response.body),
+        'data': decoded,
         'statusCode': response.statusCode,
+        'token': token,
+        'userId': userId,
       };
     } catch (e) {
       print('Dynamic Login Error: $e');
@@ -1394,6 +1477,8 @@ class ApiService {
         'success': false,
         'data': {'message': 'Network error: $e'},
         'statusCode': 500,
+        'token': null,
+        'userId': null,
       };
     }
   }
