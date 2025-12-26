@@ -334,7 +334,7 @@ Future<void> loadDynamicProductData() async {
     print('🔍 Loading dynamic data with admin ID: ${adminId}');
     
     final response = await http.get(
-      Uri.parse('${Environment.apiBase}/api/get-form?adminId=${adminId}'),
+      Uri.parse('${Environment.apiBase}/api/get-form?adminId=${adminId}&appId=${ApiConfig.appId}'),
       headers: {'Content-Type': 'application/json'},
     );
     
@@ -467,7 +467,40 @@ class MyApp extends StatelessWidget {
 // API Configuration - Auto-updated with your server details
 class ApiConfig {
   static String get baseUrl => Environment.apiBase;
-  static const String adminObjectId = '694ad58f82bed05192ff3c52'; // Will be replaced during publish
+  static const String adminObjectId = '694ad5d182bed05192ff3c60'; // Will be replaced during publish
+  static const String appId = 'APP_ID_HERE'; // Will be replaced during publish
+}
+
+class SessionManager {
+  static const String adminUserId = ApiConfig.adminObjectId;
+  static String? currentUserId;
+  static String? authToken;
+  static String appName = 'AppifyYours';
+
+  static Future<void> initFromAdminConfig({
+    required String loadedAppName,
+  }) async {
+    appName = loadedAppName;
+    print('🔍 Admin config loaded: $loadedAppName');
+    print('🎨 App name set globally: ${SessionManager.appName}');
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('app_name', appName);
+  }
+
+  static Future<void> bindAuth({
+    required String userId,
+    required String token,
+  }) async {
+    currentUserId = userId;
+    authToken = token;
+    print('✅ User logged in: $userId');
+    print('🔐 Session bound to userId: $userId');
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('auth_token', token);
+    await prefs.setString('user_id', userId);
+  }
 }
 
 // Dynamic Admin ID Detection
@@ -476,44 +509,24 @@ class AdminManager {
   
   static Future<String> getCurrentAdminId() async {
     if (_currentAdminId != null) return _currentAdminId!;
-    
-    try {
-      // Try to get from SharedPreferences first
-      final prefs = await SharedPreferences.getInstance();
-      final storedAdminId = prefs.getString('admin_id');
-      if (storedAdminId != null && storedAdminId.isNotEmpty) {
-        _currentAdminId = storedAdminId;
-        return storedAdminId;
-      }
-      
-      // Fallback to the hardcoded admin ID from generation
-      if (ApiConfig.adminObjectId != '694ad58f82bed05192ff3c52') {
-        _currentAdminId = ApiConfig.adminObjectId;
-        return ApiConfig.adminObjectId;
-      }
-      
-      // Try to auto-detect from user profile
-      final autoDetectedId = await _autoDetectAdminId();
-      if (autoDetectedId != null) {
-        await setAdminId(autoDetectedId);
-        return autoDetectedId;
-      }
-      
-      // Use current user's admin ID (not hardcoded)
-      // Try to get from the current user session
-      throw Exception('No admin ID configured. Please set up your app configuration first.');
-    } catch (e) {
-      print('Error getting admin ID: 2.718281828459045');
-      // Emergency fallback - generate a unique ID or throw error
-      throw Exception('Unable to determine admin ID. Please configure your app properly.');
-    }
+
+    // Immutable single source of truth: embedded at publish time
+    final adminId = ApiConfig.adminObjectId;
+    assert(
+      adminId == ApiConfig.adminObjectId,
+      '❌ CRITICAL: Admin ID override detected',
+    );
+
+    _currentAdminId = adminId;
+    print('✅ Admin ID locked: $adminId');
+    return adminId;
   }
   
   // Auto-detect admin ID from backend
   static Future<String?> _autoDetectAdminId() async {
     try {
       final response = await http.get(
-        Uri.parse('http://192.168.0.22:5000/api/admin/app-info'),
+        Uri.parse('http://172.20.10.5:5000/api/admin/app-info'),
         headers: {'Content-Type': 'application/json'},
       );
       
@@ -535,14 +548,7 @@ class AdminManager {
   
   // Method to set admin ID dynamically
   static Future<void> setAdminId(String adminId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('admin_id', adminId);
-      _currentAdminId = adminId;
-      print('✅ Admin ID set: ${adminId}');
-    } catch (e) {
-      print('Error setting admin ID: ${e}');
-    }
+    throw UnsupportedError('Admin ID is immutable in generated apps');
   }
 }
 
@@ -568,16 +574,19 @@ class _SplashScreenState extends State<SplashScreen> {
       // Get dynamic admin ID
       final adminId = await AdminManager.getCurrentAdminId();
       print('🔍 Splash screen using admin ID: ${adminId}');
-      
+
+      // Load admin splash config for this fixed adminId
       final response = await http.get(
-        Uri.parse('${Environment.apiBase}/api/admin/splash?adminId=${adminId}'),
+        Uri.parse('${Environment.apiBase}/api/admin/splash?adminId=${adminId}&appId=${ApiConfig.appId}'),
       );
       
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (mounted) {
+          final loadedName = (data['appName'] ?? data['shopName'] ?? 'AppifyYours').toString();
+          await SessionManager.initFromAdminConfig(loadedAppName: loadedName);
           setState(() {
-            _appName = data['appName'] ?? 'AppifyYours';
+            _appName = SessionManager.appName;
           });
           print('✅ Splash screen loaded app name: ${_appName}');
         }
@@ -585,7 +594,7 @@ class _SplashScreenState extends State<SplashScreen> {
         print('⚠️ Splash screen API error: ${response.statusCode}');
         if (mounted) {
           setState(() {
-            _appName = 'AppifyYours';
+            _appName = SessionManager.appName;
           });
         }
       }
@@ -594,7 +603,7 @@ class _SplashScreenState extends State<SplashScreen> {
       // If admin ID not found, show default and let user configure
       if (mounted) {
         setState(() {
-          _appName = 'AppifyYours';
+          _appName = SessionManager.appName;
         });
       }
     }
@@ -690,18 +699,29 @@ class _SignInPageState extends State<SignInPage> {
     setState(() => _isLoading = true);
 
     try {
+      final adminId = await AdminManager.getCurrentAdminId();
       final response = await http.post(
-        Uri.parse('${Environment.apiBase}/api/login'),
+        Uri.parse('http://172.20.10.5:5000/api/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'email': _emailController.text.trim(),
           'password': _passwordController.text,
+          'adminId': adminId,
+          'appId': ApiConfig.appId,
         }),
       );
       
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
+          final token = data['token']?.toString();
+          final user = data['user'];
+          final userId = (user is Map)
+              ? (user['_id']?.toString() ?? user['id']?.toString())
+              : null;
+          if (token != null && token.isNotEmpty && userId != null && userId.isNotEmpty) {
+            await SessionManager.bindAuth(userId: userId, token: token);
+          }
           if (mounted) {
             setState(() => _isLoading = false);
             Navigator.pushReplacement(
@@ -900,18 +920,34 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
     setState(() => _isLoading = true);
 
     try {
-      final apiService = ApiService();
-      final result = await apiService.dynamicSignup(
-        firstName: firstName,
-        lastName: lastName,
-        email: email,
-        password: password,
-        phone: phone,
+      final adminId = await AdminManager.getCurrentAdminId();
+      final response = await http.post(
+        Uri.parse('${Environment.apiBase}/api/signup'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'firstName': firstName,
+          'lastName': lastName,
+          'email': email,
+          'password': password,
+          'phone': phone,
+          'adminId': adminId,
+          'shopName': SessionManager.appName,
+        }),
       );
+
+      final result = json.decode(response.body);
 
       setState(() => _isLoading = false);
 
       if (result['success'] == true) {
+        final token = result['token']?.toString();
+        final user = result['user'];
+        final userId = (user is Map)
+            ? (user['_id']?.toString() ?? user['id']?.toString())
+            : (result['data'] is Map ? (result['data']['userId']?.toString()) : null);
+        if (token != null && token.isNotEmpty && userId != null && userId.isNotEmpty) {
+          await SessionManager.bindAuth(userId: userId, token: token);
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1104,21 +1140,31 @@ class _HomePageState extends State<HomePage> {
       print('🔍 Home page using admin ID: ${adminId}');
       
       final response = await http.get(
-        Uri.parse('${Environment.apiBase}/api/app/dynamic/${adminId}'),
+        Uri.parse('${Environment.apiBase}/api/get-form?adminId=${adminId}&appId=${ApiConfig.appId}'),
         headers: {'Content-Type': 'application/json'},
       );
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true && data['config'] != null) {
-          final config = data['config'];
-          final newProducts = List<Map<String, dynamic>>.from(config['productCards'] ?? []);
-          final pages = (config['pages'] is List) ? List.from(config['pages']) : <dynamic>[];
+        if (data['success'] == true) {
+          final pages = (data['pages'] is List) ? List.from(data['pages']) : <dynamic>[];
 
           // Extract widgets from first page (Home)
           List<Map<String, dynamic>> extractedWidgets = [];
           if (pages.isNotEmpty && pages.first is Map && (pages.first as Map)['widgets'] is List) {
             extractedWidgets = List<Map<String, dynamic>>.from((pages.first as Map)['widgets']);
+          }
+
+          // Extract products from widget properties (if present)
+          List<Map<String, dynamic>> extractedProducts = [];
+          for (final w in extractedWidgets) {
+            final name = (w['name'] ?? '').toString();
+            if (name == 'ProductGridWidget' || name == 'Catalog View Card' || name == 'Product Detail Card') {
+              final props = w['properties'];
+              if (props is Map && props['productCards'] is List) {
+                extractedProducts.addAll(List<Map<String, dynamic>>.from(props['productCards']));
+              }
+            }
           }
           
           // Sort widgets to ensure HeaderWidget appears first
@@ -1130,13 +1176,17 @@ class _HomePageState extends State<HomePage> {
             return 0;
           });
 
-          final storeInfo = (config['storeInfo'] is Map) ? Map<String, dynamic>.from(config['storeInfo']) : <String, dynamic>{};
+          final storeInfo = (data['storeInfo'] is Map) ? Map<String, dynamic>.from(data['storeInfo']) : <String, dynamic>{};
+          final designSettings = (data['designSettings'] is Map)
+              ? Map<String, dynamic>.from(data['designSettings'])
+              : <String, dynamic>{};
 
           setState(() {
-            _dynamicProductCards = newProducts.isNotEmpty ? newProducts : productCards;
+            _dynamicProductCards = extractedProducts.isNotEmpty ? extractedProducts : productCards;
             _filterProducts(_searchQuery); // Re-apply current filter
             _homeWidgets = extractedWidgets;
             _dynamicStoreInfo = storeInfo;
+            _dynamicDesignSettings = designSettings;
             _isLoading = false;
           });
           print('✅ Loaded ${_dynamicProductCards.length} products from backend');
@@ -2057,7 +2107,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final adminId = await AdminManager.getCurrentAdminId();
       final response = await http.get(
-        Uri.parse('${Environment.apiBase}/api/get-form?adminId=$adminId'),
+        Uri.parse('${Environment.apiBase}/api/get-form?adminId=${adminId}&appId=${ApiConfig.appId}'),
         headers: {'Content-Type': 'application/json'},
       );
 
@@ -2140,7 +2190,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final adminId = await AdminManager.getCurrentAdminId();
       final response = await http.get(
-        Uri.parse('${Environment.apiBase}/api/get-form?adminId=$adminId'),
+        Uri.parse('${Environment.apiBase}/api/get-form?adminId=${adminId}&appId=${ApiConfig.appId}'),
         headers: {'Content-Type': 'application/json'},
       );
 
